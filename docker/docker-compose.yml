@@ -1,0 +1,87 @@
+# Desarrollo local. En producción esto lo reemplaza el orquestador de contenedores,
+# pero la topología es la misma: N dominios gRPC + un transformador + una Postgres.
+#
+# Cada dominio es un servicio con su propio puerto. Agregar uno = copiar el bloque.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: plataforma
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: dev
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev -d plataforma"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # Bus de pub/sub para el fan-out del SSE.
+  # Sin esto, el SSE funciona con UNA instancia del transformador y falla en silencio
+  # con dos. Ver plantillas/transformador/src/lib/bus.ts.
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly
+    ulimits:
+      memlock: -1
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  ejemplo:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.dominio
+      args:
+        DOMAIN_PATH: dominios/ejemplo
+    environment:
+      DOMAIN_NAME: ejemplo
+      APP_ENV: development
+      GRPC_PORT: 50051
+      GRPC_MAX_WORKERS: 10
+      # Invariante: GRPC_MAX_WORKERS <= DB_POOL_SIZE + DB_MAX_OVERFLOW
+      # Con una sola Postgres, el presupuesto de conexiones es compartido entre TODOS
+      # los dominios. Ver 04-base-de-datos.md.
+      DB_POOL_SIZE: 3
+      DB_MAX_OVERFLOW: 7
+      DATABASE_URL: postgresql://dev:dev@postgres:5432/plataforma
+    ports:
+      - "50051:50051"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      # gRPC no responde a curl: se usa grpc_health_probe contra grpc.health.v1.Health
+      test: ["CMD", "/bin/grpc_health_probe", "-addr=:50051"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  transformador:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.transformador
+    environment:
+      NODE_ENV: production
+      PORT: 4321
+      EJEMPLO_GRPC_HOST: ejemplo:50051
+      GRPC_DEADLINE_MS: 3000
+      REDIS_URL: redis://dragonfly:6379
+    ports:
+      - "4321:4321"
+    depends_on:
+      ejemplo:
+        condition: service_healthy
+      dragonfly:
+        condition: service_healthy
+
+volumes:
+  pgdata:

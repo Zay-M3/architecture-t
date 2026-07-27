@@ -1,0 +1,46 @@
+// Túnel de webhooks de terceros.
+//
+// Twilio, Meta, Shopify y Sendcloud hacen POST HTTP y no pueden hablar gRPC. Ningún
+// dominio expone HTTP. Solución: el transformador recibe el POST y lo reenvía CRUDO
+// por acá; el dominio dueño valida la firma con su propio secreto.
+//
+// Ver 03-contrato-grpc.md.
+
+syntax = "proto3";
+
+package shared.v1;
+
+message InboundWebhook {
+  // "twilio" | "meta" | "shopify" | "sendcloud"
+  string provider = 1;
+
+  // El path original del request.
+  string path = 2;
+
+  // Headers del request, incluida la cabecera de firma
+  // (X-Hub-Signature-256 en Meta, X-Twilio-Signature en Twilio).
+  map<string, string> headers = 3;
+
+  // El body EXACTAMENTE como llegó, sin parsear.
+  //
+  // Meta firma sobre estos bytes. Si el transformador deserializa y reserializa el
+  // JSON, la firma no valida NUNCA — el orden de las claves y el espaciado cambian.
+  bytes raw_body = 4;
+}
+
+message InboundWebhookResponse {
+  // El status que el transformador va a devolverle al proveedor.
+  //
+  // Lo decide el DOMINIO, no el transformador: Twilio y Meta reintentan ante
+  // cualquier cosa que no sea 2xx, así que quién responde qué importa.
+  //
+  // Patrón: aceptar los bytes, responder 200, y procesar después. Meta espera 200 en
+  // pocos segundos; si el procesamiento cuelga del webhook se disparan reintentos.
+  int32 http_status = 1;
+
+  bytes body = 2;
+}
+
+service WebhookService {
+  rpc HandleInbound(InboundWebhook) returns (InboundWebhookResponse);
+}

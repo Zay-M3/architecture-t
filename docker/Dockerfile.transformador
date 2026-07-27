@@ -1,0 +1,58 @@
+# syntax=docker/dockerfile:1
+#
+# Imagen del transformador: Astro SSR con @astrojs/node.
+#
+# Sobre el runtime: se usa Bun para INSTALAR (soportado oficialmente por Astro) y Node
+# para SERVIR (adapter oficial). No hay adapter oficial de Bun y su propia guía aclara
+# que por defecto Astro corre sobre Node incluso invocado con `bun`.
+#
+# Si algún día se verifica que `bun ./dist/server/entry.mjs` sirve SSR bien, cambiar es
+# una línea: el CMD de abajo. Nada más de la imagen se toca. Ver 07, P11.
+
+# ── Stage 1: build ───────────────────────────────────────────────────────────
+FROM oven/bun:1 AS builder
+
+WORKDIR /build
+
+# Capa cacheable
+COPY transformador/package.json transformador/bun.lockb* ./
+RUN bun install --frozen-lockfile
+
+COPY transformador/ ./
+# Los .proto los lee proto-loader en runtime; van al lado del bundle.
+COPY dominios/*/proto ./proto
+
+RUN bun run build
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+FROM node:22-slim AS runtime
+
+WORKDIR /app
+
+ENV NODE_ENV=production \
+    PORT=4321 \
+    HOST=0.0.0.0
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates curl \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /build/dist ./dist
+COPY --from=builder /build/node_modules ./node_modules
+COPY --from=builder /build/package.json ./
+COPY --from=builder /build/proto ./proto
+
+RUN useradd --no-create-home --shell /usr/sbin/nologin appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+EXPOSE 4321
+
+# Acá sí hay HTTP, así que curl sirve.
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD curl -fsS http://localhost:4321/health || exit 1
+
+# @astrojs/node en modo standalone genera este entrypoint.
+# Para probar Bun como runtime:  CMD ["bun", "./dist/server/entry.mjs"]
+CMD ["node", "./dist/server/entry.mjs"]

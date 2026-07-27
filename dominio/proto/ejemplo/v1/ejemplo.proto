@@ -1,0 +1,82 @@
+// Plantilla de .proto. Sigue las convenciones de 03-contrato-grpc.md.
+//
+// Los comentarios de este archivo SON la documentación: protoc-gen-doc los extrae, y
+// reflection los expone a Postman / grpcurl / Apidog. Escribirlos no es opcional.
+
+syntax = "proto3";
+
+package ejemplo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+// El 0 SIEMPRE es _UNSPECIFIED: proto3 no distingue "no enviado" de "valor por
+// defecto", así que sin él un campo ausente parecería el primer estado válido.
+enum EjemploEstado {
+  EJEMPLO_ESTADO_UNSPECIFIED = 0;
+  EJEMPLO_ESTADO_BORRADOR = 1;
+  EJEMPLO_ESTADO_CONFIRMADO = 2;
+}
+
+// ── Mensajes ─────────────────────────────────────────────────────────────────
+message Ejemplo {
+  string id = 1;
+  string codigo = 2;
+  EjemploEstado estado = 3;
+
+  // Dinero SIEMPRE como string: double es float64 y pierde precisión en importes.
+  // Se parsea con Decimal del lado del servidor.
+  string total = 4;                              // "1234.56"
+  string moneda = 5;                              // ISO 4217
+
+  // Fecha sin hora ni zona → string ISO. Forzarla a Timestamp inventa un mediodía.
+  string fecha_emision = 6;                       // "2026-07-27"
+
+  // Instante real → Timestamp.
+  google.protobuf.Timestamp created_at = 7;
+
+  // Auditoría: quién lo creó. Lo pone el transformador desde la sesión.
+  int32 created_by_user_id = 8;
+  string created_by_user_name = 9;
+}
+
+// ── Requests / Responses ─────────────────────────────────────────────────────
+message GetEjemploRequest {
+  string id = 1;
+}
+
+message ListEjemplosRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  repeated EjemploEstado estados = 3;
+  string search = 4;
+}
+
+// Todo listado devuelve items + total. El total se calcula en SQL (1 query de datos
+// + 1 count), nunca contando en Python.
+message ListEjemplosResponse {
+  repeated Ejemplo items = 1;
+  int32 total = 2;
+}
+
+// Toda mutación lleva el actor: el dominio tiene que registrar quién la hizo.
+message ConfirmarEjemploRequest {
+  string id = 1;
+  string motivo = 2;                              // el dominio exige >= 10 palabras
+  int32 actor_user_id = 3;
+  string actor_user_name = 4;
+}
+
+// ── Servicio ─────────────────────────────────────────────────────────────────
+service EjemploService {
+  // Devuelve un ejemplo por id. NOT_FOUND si no existe.
+  rpc GetEjemplo(GetEjemploRequest) returns (Ejemplo);
+
+  // Lista paginada con filtros. Todo el filtrado ocurre en SQL.
+  rpc ListEjemplos(ListEjemplosRequest) returns (ListEjemplosResponse);
+
+  // Transición borrador -> confirmado.
+  // FAILED_PRECONDITION si el estado de origen no lo permite.
+  // INVALID_ARGUMENT si el motivo tiene menos de 10 palabras.
+  rpc ConfirmarEjemplo(ConfirmarEjemploRequest) returns (Ejemplo);
+}

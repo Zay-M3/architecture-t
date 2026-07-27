@@ -1,0 +1,25 @@
+{
+  "name": "transformador",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev",
+    "build": "astro build",
+    "start": "node ./dist/server/entry.mjs",
+    "start:bun": "bun ./dist/server/entry.mjs",
+    "check": "astro check && tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "astro": "^5.0.0",
+    "@astrojs/node": "^9.0.0",
+    "@grpc/grpc-js": "^1.12.0",
+    "@grpc/proto-loader": "^0.7.13",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.0",
+    "@types/node": "^22.0.0"
+  },
+  "packageManager": "bun@1.1.38"
+}

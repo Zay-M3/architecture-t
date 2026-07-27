@@ -1,0 +1,78 @@
+# syntax=docker/dockerfile:1
+#
+# Imagen de un dominio: servidor gRPC puro. Sin uvicorn, sin gunicorn.
+#
+# Se parametriza con DOMAIN_PATH para que la misma imagen sirva a todos los dominios:
+#   docker build --build-arg DOMAIN_PATH=dominios/compras -f docker/Dockerfile.dominio .
+
+ARG PYTHON_VERSION=3.12
+
+# ── Stage 1: dependencias y stubs ────────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS builder
+
+ARG DOMAIN_PATH
+WORKDIR /build
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        gcc libpq-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv gestiona el entorno
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+# Capa cacheable: solo se invalida si cambian las dependencias
+COPY ${DOMAIN_PATH}/pyproject.toml ./
+RUN uv venv /venv && VIRTUAL_ENV=/venv uv pip install -r pyproject.toml --all-extras
+
+# Generar los stubs en el build: app/grpc_gen NO se commitea
+COPY ${DOMAIN_PATH}/proto ./proto
+COPY ${DOMAIN_PATH}/app ./app
+RUN VIRTUAL_ENV=/venv uv pip install grpcio-tools \
+ && /venv/bin/python -m grpc_tools.protoc \
+      --proto_path=proto \
+      --python_out=app/grpc_gen \
+      --grpc_python_out=app/grpc_gen \
+      --pyi_out=app/grpc_gen \
+      $(find proto -name '*.proto') \
+ && find app/grpc_gen -type d -exec touch {}/__init__.py \; \
+ && find app/grpc_gen -name '*_pb2*.py' \
+      -exec sed -i -E 's/^import ([a-z0-9_]+_pb2)/from . import \1/' {} \;
+
+# ── Stage 2: runtime ─────────────────────────────────────────────────────────
+FROM python:${PYTHON_VERSION}-slim AS runtime
+
+ARG DOMAIN_PATH
+WORKDIR /code
+
+# libpq5 (no -dev) para psycopg2 en runtime
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        libpq5 ca-certificates \
+    && update-ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+# grpc_health_probe: el HEALTHCHECK no puede usar curl porque no hay HTTP.
+# Consulta grpc.health.v1.Health, que el servidor registra en server.py.
+ARG GRPC_HEALTH_PROBE_VERSION=v0.4.35
+ADD https://github.com/grpc-ecosystem/grpc-health-probe/releases/download/${GRPC_HEALTH_PROBE_VERSION}/grpc_health_probe-linux-amd64 /bin/grpc_health_probe
+RUN chmod +x /bin/grpc_health_probe
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PATH="/venv/bin:$PATH"
+
+COPY --from=builder /venv /venv
+COPY --from=builder /build/app ./app
+COPY ${DOMAIN_PATH}/proto ./proto
+
+# Usuario sin privilegios
+RUN useradd --no-create-home --shell /usr/sbin/nologin appuser \
+    && chown -R appuser:appuser /code
+USER appuser
+
+EXPOSE 50051
+
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD /bin/grpc_health_probe -addr=:50051 || exit 1
+
+# El servidor maneja SIGTERM y apaga ordenado (ver app/server.py)
+CMD ["python", "-m", "app.server"]
