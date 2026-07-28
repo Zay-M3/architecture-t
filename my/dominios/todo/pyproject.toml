@@ -1,0 +1,45 @@
+[project]
+name = "dominio-ejemplo"
+version = "0.1.0"
+requires-python = ">=3.12"
+
+# Sin FastAPI, sin uvicorn, sin gunicorn: el dominio expone SOLO gRPC.
+dependencies = [
+    "grpcio>=1.66",
+    "grpcio-reflection>=1.66",       # documentación: el equivalente a servir un OpenAPI
+    "grpcio-health-checking>=1.66",  # lo consume grpc_health_probe desde Docker
+    "protobuf>=5.28",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "dependency-injector>=4.41",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.5",
+]
+
+[dependency-groups]
+dev = [
+    "grpcio-tools>=1.66",   # genera los stubs; no hace falta en runtime
+    "pytest>=8",
+    "pytest-cov>=5",
+    "ruff>=0.7",
+    "watchfiles>=0.24",     # recarga en desarrollo (gRPC no trae --reload)
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# los stubs generados no se lintean
+extend-exclude = ["app/grpc_gen"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # imports ordenados
+    "A",             # flake8-builtins: no shadowear builtins
+    "B",             # bugbear
+    "UP",            # pyupgrade
+]
+
+[tool.pytest.ini_options]
+pythonpath = "."
+testpaths = ["tests"]

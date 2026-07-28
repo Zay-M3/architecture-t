@@ -1,12 +1,3 @@
-"""CLI de la plataforma.
-
-Typer es la INTERFAZ. Docker levanta y supervisa los procesos; Alembic migra. Este
-archivo no es un gestor de procesos: si lo fuera, habría que resolver reinicio
-automático, health checks y rolling restart, que es exactamente lo que Docker ya hace.
-
-Uso:  oc --help
-"""
-
 from __future__ import annotations
 
 import re
@@ -14,17 +5,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+
 import typer
 
 from config import (
-    COMPOSE_FILE,
     DOMAINS,
     ORCHESTRATOR_PATH,
     ROOT,
+    DOCKER_FILE,
     TRANSFORMER_PATH,
     TYPE_CHECKER,
     domain_by_name,
     selected,
+    Domain
 )
 
 app = typer.Typer(no_args_is_help=True, help="Orquestador de la plataforma")
@@ -41,53 +34,78 @@ def _run(cmd: list[str], cwd: str | Path | None = None) -> None:
         raise typer.Exit(result.returncode)
 
 
-# ── Ciclo de vida ────────────────────────────────────────────────────────────
-def _compose(*args: str) -> list[str]:
-    """Prefijo de docker compose.
+def _tag(d: Domain) -> str:
+    """Nombre de la imagen y del contenedor de un dominio.
 
-    --project-directory no es opcional: el compose declara `context: .` esperando la
-    raíz del repo, y con solo -f el contexto sería docker/, que rompe los builds.
+    Un solo sitio: lo usan el build, el run, los logs y el down. Repetirlo a mano
+    garantiza que algún día uno quede desincronizado.
+    """
+    return f"dominio-{d.name}"
+
+
+def _build(d: Domain) -> list[str]:
+    """Línea de `docker build` para un dominio."""
+    return [
+        "docker", "build",
+        "-f", str(DOCKER_FILE),
+        "--target", "runtime",
+        # Relativo al contexto: los COPY del Dockerfile no ven rutas absolutas.
+        "--build-arg", f"DOMAIN_PATH={d.path.relative_to(ROOT)}",
+        "-t", _tag(d),
+        str(ROOT),
+    ]
+
+
+def _start(d: Domain) -> list[str]:
+    """Línea de `docker run` para un dominio.
+
+    Dentro del contenedor el servidor siempre escucha en 50051 (es lo que declara el
+    EXPOSE). Lo que cambia por dominio es el puerto de FUERA.
     """
     return [
-        "docker", "compose",
-        "-f", str(COMPOSE_FILE),
-        "--project-directory", str(ROOT),
-        *args,
+        "docker", "run", "-d",
+        "--name", _tag(d),
+        "-p", f"{d.grpc_port}:50051",
+        _tag(d),
     ]
 
 
 @app.command()
-def up(domain: str | None = None, build: bool = False) -> None:
-    """Levanta la plataforma (o un dominio) con docker compose."""
-    cmd = _compose("up", "-d")
-    if build:
-        cmd.append("--build")
-    if domain:
-        cmd.append(domain_by_name(domain).name)
-    _run(cmd)
+def up(domain: str | None = None) -> None:
+    """Construye y levanta la plataforma (o un dominio)."""
+    for d in selected(domain):
+        _run(_build(d))
+        _run(_start(d))
 
 
 @app.command()
-def down() -> None:
-    """Baja la plataforma."""
-    _run(_compose("down"))
+def down(domain: str | None = None) -> None:
+    """Baja la plataforma (o un dominio).
+
+    `rm -f` para y borra en un paso; sin compose no hay un `down` que lo haga solo.
+    """
+    for d in selected(domain):
+        _run(["docker", "rm", "-f", _tag(d)])
 
 
 @app.command()
-def logs(domain: str | None = None, follow: bool = True) -> None:
-    """Logs de la plataforma o de un dominio."""
-    cmd = _compose("logs")
+def logs(domain: str, follow: bool = True) -> None:
+    """Logs de un dominio.
+
+    El dominio es obligatorio: `docker logs` habla con UN contenedor. Compose podía
+    multiplexar varios porque él los conocía a todos.
+    """
+    cmd = ["docker", "logs"]
     if follow:
         cmd.append("-f")
-    if domain:
-        cmd.append(domain_by_name(domain).name)
+    cmd.append(_tag(domain_by_name(domain)))
     _run(cmd)
 
 
 @app.command()
 def ps() -> None:
     """Estado de los contenedores."""
-    _run(_compose("ps"))
+    _run(["docker", "ps"])
 
 
 @app.command()
@@ -109,8 +127,6 @@ def dev(domain: str) -> None:
     d = domain_by_name(domain)
     _run(["watchfiles", "python -m app.server", "app/"], cwd=d.path)
 
-
-# ── Migraciones ──────────────────────────────────────────────────────────────
 def _alembic(*args: str) -> None:
     # alembic.ini vive en orquestador/, no donde el usuario esté parado.
     _run(["alembic", *args], cwd=ORCHESTRATOR_PATH)
@@ -178,17 +194,42 @@ def db_heads() -> None:
         raise typer.Exit(1)
     typer.secho(f"✓ un solo head: {heads[0]}", fg=typer.colors.GREEN)
 
+@app.command()
+def lint(fix: bool = False) -> None:
+    """ruff check (+ format con --fix)."""
+    for d in DOMAINS:
+        _run(["ruff", "check", *(["--fix"] if fix else []), "."], cwd=d.path)
+        _run(["ruff", "format", *([] if fix else ["--check"]), "."], cwd=d.path)
 
-# ── Contratos gRPC ───────────────────────────────────────────────────────────
+
+# protoc emite el import del hermano en dos formas según el .proto:
+#   proto plano                 →  import ejemplo_pb2
+#   proto con package/carpetas  →  from todo.v1 import todo_pb2
+# Las dos son absolutas y se rompen dentro de app/grpc_gen/. Hay que cubrir ambas.
 _IMPORT_RE = re.compile(r"^import (\w+_pb2)", flags=re.MULTILINE)
+_FROM_RE = re.compile(r"^from ([\w.]+) import (\w+_pb2)", flags=re.MULTILINE)
 
 
-def _fix_generated_imports(out_dir: Path) -> None:
-    """grpc_tools.protoc emite `import xxx_pb2` con rutas absolutas que se rompen dentro
-    de un paquete. Se pasan a relativas y se crean los __init__.py."""
+def _fix_generated_imports(out_dir: Path, root_pkg: str) -> None:
+    """Reescribe los imports generados y crea los __init__.py.
+
+    `root_pkg` es dónde vive el paquete visto desde el dominio ("app.grpc_gen").
+    """
+    # Los paquetes que salieron de ESTA generación. Es lo que distingue
+    # `from todo.v1 import ...` (nuestro, hay que reescribir) de
+    # `from google.protobuf import timestamp_pb2` (de la librería, no se toca).
+    generados = {p.name for p in out_dir.iterdir() if p.is_dir()}
+
+    def _absolutizar(m: re.Match) -> str:
+        pkg, mod = m.group(1), m.group(2)
+        if pkg.split(".")[0] not in generados:
+            return m.group(0)
+        return f"from {root_pkg}.{pkg} import {mod}"
+
     for py in out_dir.rglob("*_pb2*.py"):
         text = py.read_text(encoding="utf-8")
         fixed = _IMPORT_RE.sub(r"from . import \1", text)
+        fixed = _FROM_RE.sub(_absolutizar, fixed)
         if fixed != text:
             py.write_text(fixed, encoding="utf-8")
     for pkg_dir in [out_dir, *[p for p in out_dir.rglob("*") if p.is_dir()]]:
@@ -214,7 +255,9 @@ def proto_gen(domain: str | None = None) -> None:
             f"--pyi_out={out_dir}",
             *files,
         ])
-        _fix_generated_imports(out_dir)
+        # "app/grpc_gen" -> "app.grpc_gen", derivado, no hardcodeado.
+        root_pkg = ".".join(out_dir.relative_to(d.path).parts)
+        _fix_generated_imports(out_dir, root_pkg)
         typer.secho(f"✓ {d.name}: stubs generados", fg=typer.colors.GREEN)
 
 
@@ -236,14 +279,6 @@ def proto_docs(out: str = "docs/proto") -> None:
                 *files,
             ])
 
-
-# ── Calidad ──────────────────────────────────────────────────────────────────
-@app.command()
-def lint(fix: bool = False) -> None:
-    """ruff check (+ format con --fix)."""
-    for d in DOMAINS:
-        _run(["ruff", "check", *(["--fix"] if fix else []), "."], cwd=d.path)
-        _run(["ruff", "format", *([] if fix else ["--check"]), "."], cwd=d.path)
 
 
 @app.command()
@@ -275,3 +310,4 @@ def check() -> None:
 
 if __name__ == "__main__":
     app()
+

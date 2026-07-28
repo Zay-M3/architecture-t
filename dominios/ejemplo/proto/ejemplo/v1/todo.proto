@@ -1,0 +1,59 @@
+// Plantilla de .proto. Sigue las convenciones de 03-contrato-grpc.md.
+//
+// Los comentarios de este archivo SON la documentación: protoc-gen-doc los extrae, y
+// reflection los expone a Postman / grpcurl / Apidog. Escribirlos no es opcional.
+
+syntax = "proto3";
+
+package todo.v1;
+
+import "google/protobuf/timestamp.proto";
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+// El 0 SIEMPRE es _UNSPECIFIED: proto3 no distingue "no enviado" de "valor por
+// defecto", así que sin él un campo ausente parecería el primer estado válido.
+enum EjemploEstado {
+  EJEMPLO_ESTADO_UNSPECIFIED = 0;
+  EJEMPLO_ESTADO_BORRADOR = 1;
+  EJEMPLO_ESTADO_CONFIRMADO = 2;
+}
+
+// ── Mensajes ─────────────────────────────────────────────────────────────────
+message Todo {
+  string id = 1;
+  string codigo = 2;
+  EjemploEstado estado = 3;
+  string nombre = 4;
+
+  // Instante real → Timestamp.
+  google.protobuf.Timestamp created_at = 5;
+
+  // Auditoría: quién lo creó. Lo pone el transformador desde la sesión.
+  int32 created_by_user_id = 6;
+  string created_by_user_name = 7;
+}
+
+
+message ListTodoRequest {
+  int32 page = 1;
+  int32 page_size = 2;
+  repeated EjemploEstado estados = 3;
+  string nombre = 4;
+}
+
+// Todo listado devuelve items + total. El total se calcula en SQL (1 query de datos
+// + 1 count), nunca contando en Python.
+message ListTodoResponse {
+  repeated Ejemplo items = 1;
+  string nombre = 2;
+}
+
+
+
+// ── Servicio ─────────────────────────────────────────────────────────────────
+service TodoService {
+
+  // Lista paginada con filtros. Todo el filtrado ocurre en SQL.
+  rpc ListEjemplos(ListTodoRequest) returns (ListTodoResponse);
+
+}

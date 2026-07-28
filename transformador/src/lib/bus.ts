@@ -38,25 +38,6 @@ function publishLocal(userId: string, payload: unknown): void {
   local.get(userId)?.forEach((send) => send(payload));
 }
 
-// ── Redis / Dragonfly: para más de una instancia ─────────────────────────────
-const REDIS_URL = process.env.REDIS_URL;
-
-let publisher: any = null;
-let subscriber: any = null;
-
-async function initRedis() {
-  if (!REDIS_URL || subscriber) return;
-  const { default: Redis } = await import('ioredis');
-  publisher = new Redis(REDIS_URL);
-  subscriber = new Redis(REDIS_URL);
-
-  await subscriber.subscribe(CHANNEL);
-  subscriber.on('message', (_channel: string, raw: string) => {
-    const { userId, payload } = JSON.parse(raw);
-    // Cada instancia entrega solo a los clientes que tiene conectados.
-    publishLocal(userId, payload);
-  });
-}
 
 // ── API pública ──────────────────────────────────────────────────────────────
 
@@ -66,10 +47,5 @@ export function subscribe(userId: string, send: Send): () => void {
 }
 
 export async function publish(userId: string, payload: unknown): Promise<void> {
-  if (REDIS_URL) {
-    await initRedis();
-    await publisher.publish(CHANNEL, JSON.stringify({ userId, payload }));
-    return;   // vuelve por el canal y se entrega en TODAS las instancias
-  }
   publishLocal(userId, payload);
 }

@@ -38,7 +38,7 @@ htmlcov/
 
 # ─── gRPC: stubs generados desde proto/ ───────────────────────────────
 # Se regeneran con grpcio-tools; no se versionan (ver ruff extend-exclude).
-dominio/app/grpc_gen/
+grpc_gen/
 *_pb2.py
 *_pb2_grpc.py
 *_pb2.pyi

@@ -15,10 +15,15 @@ import * as protoLoader from '@grpc/proto-loader';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 
-const PROTO_ROOT = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  '../../proto',
-);
+/** Raíz de los .proto, que proto-loader lee en runtime.
+ *
+ *  No se puede derivar de import.meta.url a secas: en dev este archivo está en
+ *  src/lib/, pero en el bundle queda en dist/server/chunks/, así que el mismo
+ *  '../../proto' apunta a dos sitios distintos. Se fija con PROTO_ROOT (ver el
+ *  compose) y el cálculo relativo queda solo como fallback para dev. */
+const PROTO_ROOT =
+  process.env.PROTO_ROOT ??
+  path.join(path.dirname(fileURLToPath(import.meta.url)), '../../proto');
 
 /** Deadline por defecto. Todas las llamadas llevan uno: sin deadline, un dominio
  *  colgado cuelga al transformador y de ahí al navegador. */

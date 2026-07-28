@@ -23,17 +23,6 @@ services:
   # Bus de pub/sub para el fan-out del SSE.
   # Sin esto, el SSE funciona con UNA instancia del transformador y falla en silencio
   # con dos. Ver plantillas/transformador/src/lib/bus.ts.
-  dragonfly:
-    image: docker.dragonflydb.io/dragonflydb/dragonfly
-    ulimits:
-      memlock: -1
-    ports:
-      - "6379:6379"
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
 
   ejemplo:
     build:
@@ -72,9 +61,11 @@ services:
     environment:
       NODE_ENV: production
       PORT: 4321
+      # Dónde deja los .proto el Dockerfile. Sin esto, el bundle los busca relativo a
+      # dist/server/chunks/ y no los encuentra. Ver src/lib/grpc.ts.
+      PROTO_ROOT: /app/proto
       EJEMPLO_GRPC_HOST: ejemplo:50051
       GRPC_DEADLINE_MS: 3000
-      REDIS_URL: redis://dragonfly:6379
     ports:
       - "4321:4321"
     depends_on:

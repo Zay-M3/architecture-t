@@ -1,39 +1,30 @@
-"""Registro de dominios.
-
-Agregar un dominio es una línea acá: los comandos del CLI lo recogen solos.
-"""
-
 from dataclasses import dataclass
 from pathlib import Path
 
-# Todas las rutas cuelgan de acá. Si fueran relativas, cada comando resolvería contra
-# el cwd y el CLI solo funcionaría invocado desde la raíz.
-ROOT = Path(__file__).resolve().parent.parent
 
+ROOT = Path(__file__).resolve().parent.parent
 
 @dataclass(frozen=True)
 class Domain:
     name: str
     path: Path
     grpc_port: int
-
-
+    
 DOMAINS: tuple[Domain, ...] = (
-    Domain(name="ejemplo", path=ROOT / "dominios/ejemplo", grpc_port=50051),
+    Domain(name="todo", path=ROOT / "dominios/todo", grpc_port=50051),
     # Domain(name="compras", path=ROOT / "dominios/compras", grpc_port=50052),
 )
+
 
 TRANSFORMER_PATH = ROOT / "transformador"
 
 # docker compose y alembic no se ejecutan desde donde uno esté parado: cada uno tiene
 # su archivo de configuración en un directorio fijo del repo.
-COMPOSE_FILE = ROOT / "docker/docker-compose.yml"
 ORCHESTRATOR_PATH = ROOT / "orquestador"
+DOCKER_FILE = ROOT / "docker/Dockerfile"
 
-# Cambiar por "mypy" o "pyright" según lo que se elija.
-# Si es `ty` (de Astral): es pre-1.0, conviene correrlo junto a mypy o pyright un
-# tiempo antes de dejarlo como único gate. Ver 07, P7.
 TYPE_CHECKER = "ty"
+
 
 
 def domain_by_name(name: str) -> Domain:
@@ -46,3 +37,4 @@ def domain_by_name(name: str) -> Domain:
 
 def selected(name: str | None) -> tuple[Domain, ...]:
     return (domain_by_name(name),) if name else DOMAINS
+

@@ -1,0 +1,78 @@
+---
+import { todo } from '../lib/grpc';
+import { toHttpStatus } from '../lib/errors';
+
+// Se renderiza en el servidor: esta llamada gRPC nunca sale del contenedor.
+let items: any[] = [];
+let error: string | null = null;
+
+try {
+  const res: any = await todo.listTodo({ page: 1, pageSize: 50 });
+  items = res.items ?? [];
+} catch (err) {
+  // El dominio ya decidió la semántica; acá solo se traduce a HTTP.
+  Astro.response.status = toHttpStatus(err);
+  error = (err as Error).message;
+}
+---
+
+<html lang="es">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Todos</title>
+  </head>
+  <body>
+    <main>
+      <h1>Todos</h1>
+
+      {error && <p class="error">{error}</p>}
+
+      {!error && items.length === 0 && <p class="vacio">Sin tareas.</p>}
+
+      {items.length > 0 && (
+        <table>
+          <thead>
+            <tr><th>Nombre</th><th>Estado</th><th>ID</th></tr>
+          </thead>
+          <tbody>
+            {items.map((t) => (
+              <tr>
+                <td>{t.nombre}</td>
+                <td>{t.estado}</td>
+                <td class="id">{t.id}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </main>
+
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 2rem 1rem;
+        line-height: 1.5;
+      }
+      main { max-width: 48rem; margin: 0 auto; }
+      h1 { font-size: 1.5rem; margin: 0 0 1.5rem; }
+
+      table { width: 100%; border-collapse: collapse; }
+      th, td {
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid #ddd;
+      }
+      th { font-size: 0.8rem; text-transform: uppercase; opacity: 0.6; }
+      .id { font-family: ui-monospace, monospace; font-size: 0.85rem; opacity: 0.6; }
+
+      .error {
+        padding: 0.75rem 1rem;
+        border-left: 3px solid #c00;
+        background: #c0000010;
+      }
+      .vacio { opacity: 0.6; }
+    </style>
+  </body>
+</html>
